@@ -144,13 +144,12 @@ async function excelMes(m, filas) {
 
 // ---------------------------------------------------------------- Después de cargar una renovación
 export async function revisarRenovacion(anterior, nueva) {
-  const inc = incremento(anterior, nueva);
-  if (inc == null || inc <= umbral()) return;
+  const inc = incremento(anterior, nueva), alta = inc != null && inc > umbral();
   modal({
-    titulo: `La renovación subió ${inc.toFixed(1)}%`, boton: 'Ver análisis',
-    cuerpo: `<p style="margin-top:0">${esc(anterior.numero_poliza || 'La póliza')} pasó de <b>${money(anterior.prima_total, anterior.moneda)}</b> a <b>${money(nueva.prima_total, nueva.moneda)}</b>, más que el ${umbral()}% que tiene configurado.</p>
-      <p class="muted small" style="margin-bottom:0">El análisis toma en cuenta edades, siniestros, antigüedad y coberturas, y le propone opciones para el cliente.</p>`,
-    onSubmit: () => { setTimeout(() => { location.hash = '#/renovacion/' + anterior.id; }, 0); }
+    titulo: inc == null ? 'Renovación cargada' : `La renovación ${inc >= 0 ? 'subió' : 'bajó'} ${Math.abs(inc).toFixed(1)}%`, boton: 'Analizar ahora',
+    cuerpo: `<p style="margin-top:0">${esc(anterior.numero_poliza || 'La póliza')} pasó de <b>${money(anterior.prima_total, anterior.moneda)}</b> a <b>${money(nueva.prima_total, nueva.moneda)}</b>${alta ? `, más que el ${umbral()}% que tiene configurado` : ''}.</p>
+      <p class="muted small" style="margin-bottom:0">El análisis revisa edades, siniestros, antigüedad, endosos y coberturas, y le dice qué conviene: renovar igual, ajustar alguna cobertura o cotizar con otra aseguradora (y con cuál). Después, al subir las cotizaciones, arma el cuadro comparativo.</p>`,
+    onSubmit: () => { setTimeout(() => { location.hash = '#/renovacion/' + anterior.id + '?auto'; }, 0); }
   });
 }
 
@@ -277,32 +276,25 @@ export async function vistaAnalisis(main, polizaId, vigente) {
       <div class="card"><h2 style="margin-bottom:12px">Qué hay que considerar</h2>
         <ul class="senales">${senales(e).map(([k, t]) => `<li class="s-${k}"><span class="ico" aria-hidden="true">${tipoSen[k]}</span><span>${esc(t)}</span></li>`).join('')}</ul></div>
 
-      <div class="card"><div class="card-head"><h2>Cotizaciones de otras aseguradoras</h2><div class="filters"><button class="btn sm" type="button" id="aCot"${r ? '' : ' disabled'}>Agregar cotización</button>${r ? '<button class="btn sm" type="button" id="aCmp">Comparativo para el cliente</button>' : ''}</div></div>
-        ${cots.length ? `<div class="tbl-wrap"><table><thead><tr><th>Aseguradora y plan</th><th class="num">Prima total</th><th>vs renovación</th><th>Condiciones</th><th></th></tr></thead><tbody>
-          ${cots.map((k, i) => { const dif = r && k.prima_total ? Math.round((k.prima_total - r.prima_total) / r.prima_total * 1000) / 10 : null; return `<tr>
-            <td><b>${esc(k.aseguradora)}</b>${k.plan ? `<div class="muted small">${esc(k.plan)}</div>` : ''}</td><td class="num">${k.prima_total ? money(k.prima_total) : '—'}</td>
-            <td>${dif == null ? '—' : `<span class="pill ${dif < 0 ? 'p-ok' : 'p-bad'}">${dif > 0 ? '+' : ''}${dif}%</span>`}</td>
-            <td class="small">${[k.deducible ? 'Deducible ' + esc(k.deducible) : '', k.coaseguro ? 'Coaseguro ' + esc(k.coaseguro) : '', k.suma_asegurada ? 'Suma ' + esc(k.suma_asegurada) : '', k.notas ? esc(k.notas) : ''].filter(Boolean).join(' · ') || '—'}</td>
-            <td class="nw">${k.archivo_ruta ? `<button type="button" class="linkbtn small" data-verc="${i}">PDF</button> ` : ''}<button type="button" class="linkbtn small" data-delc="${i}">Quitar</button></td></tr>`; }).join('')}
-          </tbody></table></div>`
-          : `<p class="muted small" style="margin:0">Suba el PDF de la cotización y la app lee prima, deducible y coaseguro. Con cotizaciones, la propuesta compara precios reales.</p>`}
-      </div>
       <div class="card" id="propuesta">
-        <div class="card-head"><h2>Propuesta</h2>${r ? `<button class="btn ${res ? '' : 'primary'}" type="button" id="aIA">${res ? 'Volver a analizar' : 'Analizar opciones'}</button>` : ''}</div>
-        <div id="aRes">${res ? pintarResultado(res, an) : `<p class="muted" style="margin:0">${r ? 'La app revisa todo lo anterior, las cotizaciones que agregue y los productos de su catálogo, y le propone qué hacer con este cliente.' : 'Disponible al cargar la renovación.'}</p>`}</div>
+        <div class="card-head"><h2>1. Qué conviene hacer</h2>${r ? `<button class="btn ${res ? '' : 'primary'}" type="button" id="aIA">${res ? 'Volver a analizar' : 'Analizar renovación'}</button>` : ''}</div>
+        ${res && (res.n_cotizaciones ?? 0) !== cots.length ? `<p class="small" role="status" style="margin:0 0 12px;padding:8px 12px;border-left:4px solid var(--warn);background:var(--warn-bg)">Hay cotizaciones que el análisis aún no considera. Use «Volver a analizar» para que diga cuál conviene.</p>` : ''}
+        <div id="aRes">${res ? pintarResultado(res, an, cots) : `<p class="muted" style="margin:0">${r ? 'La app revisa la renovación, edades, siniestros, antigüedad, endosos y coberturas, y le dice qué opciones tiene: renovar igual, ajustar coberturas o cotizar con otra aseguradora (y con cuál). Cada opción trae su botón para subir la cotización.' : 'Disponible al cargar la renovación.'}</p>`}</div>
+      </div>
+
+      <div class="card"><div class="card-head"><h2>2. Cotizaciones</h2><div class="filters">
+          <label class="btn sm${r ? '' : ' disabled'}" for="aVarias" style="cursor:pointer">Subir PDFs de cotizaciones</label><input type="file" id="aVarias" class="sr" accept="application/pdf,.pdf" multiple${r ? '' : ' disabled'}>
+          <button class="btn sm" type="button" id="aCot"${r ? '' : ' disabled'}>Agregar a mano</button></div></div>
+        <p id="aVarMsg" class="small" role="status" style="margin:0"></p>
+        ${cots.length ? `<div class="list">${cots.map((k, i) => `<div class="li"><div><b>${esc(k.aseguradora)}</b>${k.plan ? ` · ${esc(k.plan)}` : ''} <span class="num">${k.prima_total ? money(k.prima_total) : ''}</span>
+            ${k.opcion ? `<div class="muted small">Para la opción: ${esc(k.opcion)}</div>` : ''}</div>
+            <span class="nw">${k.archivo_ruta ? `<button type="button" class="linkbtn small" data-verc="${i}">PDF</button> ` : ''}<button type="button" class="linkbtn small" data-edc="${i}">Editar</button> <button type="button" class="linkbtn small" data-delc="${i}">Quitar</button></span></div>`).join('')}</div>`
+          : `<p class="muted small" style="margin:0">Suba una, dos o tres cotizaciones en PDF (puede seleccionarlas juntas): la app lee prima, deducible, coaseguro, suma y nivel hospitalario, y arma el cuadro comparativo de abajo.</p>`}
       </div>
 
     </div>
 
     <div class="col" style="flex:2 1 340px">
-      <div class="card"><h2 style="margin-bottom:10px">Comparativo</h2>
-        <div class="tbl-wrap"><table class="comp"><thead><tr><th></th><th>Anterior</th><th>Renovación</th></tr></thead><tbody>
-          ${fila('Aseguradora', p.aseguradora_nombre, r?.aseguradora_nombre)}${fila('Producto', p.producto, r?.producto)}
-          ${fila('Prima total', money(p.prima_total, p.moneda), r && money(r.prima_total, r.moneda))}${fila('Prima neta', money(p.prima_neta, p.moneda), r && money(r.prima_neta, r.moneda))}
-          ${fila('Forma de pago', FORMAS[p.forma_pago], r && FORMAS[r.forma_pago])}
-          ${camposR.map(([k, l]) => fila(l, p.datos_ramo?.[k], r?.datos_ramo?.[k])).join('')}
-        </tbody></table></div></div>
-
       <div class="card"><h2 style="margin-bottom:10px">Historial de primas</h2>
         <div class="hist">${e.historial.map((h, i) => { const prev = e.historial[i - 1], d = prev && prev.moneda === h.moneda ? Math.round((h.prima - prev.prima) / prev.prima * 1000) / 10 : null; return `
           <div class="hrow${h.renovacion ? ' nueva' : ''}"><span class="small">${h.inicio ? h.inicio.slice(0, 4) : ''}</span>
@@ -315,6 +307,10 @@ export async function vistaAnalisis(main, polizaId, vigente) {
           ${textarea('Notas', 'notas', an.notas || '')}</div>
         <div class="filters" style="margin-top:12px"><button class="btn primary" type="button" id="aGuardar"${r ? '' : ' disabled'}>Guardar decisión</button></div></div>
     </div>
+  </section>
+  <section class="card" id="cuadro">
+    <div class="card-head"><h2>3. Cuadro comparativo</h2>${r ? '<button class="btn sm primary" type="button" id="aCmp">PDF para el cliente</button>' : ''}</div>
+    ${cuadro(e, cots, res)}
   </section>`;
 
   // ---- acciones
@@ -331,10 +327,25 @@ export async function vistaAnalisis(main, polizaId, vigente) {
     try { await guardar({ decision: main.querySelector('[name=decision]').value, notas: txt(main.querySelector('[name=notas]').value) }); toast('Decisión guardada.'); refrescar(); }
     catch (err) { toast(err.message, true); }
   };
-  main.querySelector('#aCot').onclick = () => formCotizacion(async k => { await guardar({ cotizaciones: [...cots, k] }); toast('Cotización agregada. Vuelva a analizar para incluirla.'); refrescar(); }, p.cliente_id);
-  main.querySelector('#aCmp')?.addEventListener('click', () => abrirComparativo({ para: p.cliente_nombre, ramo: p.ramo, clienteId: p.cliente_id, opciones: [
-    { etiqueta: `Renovación ${r.aseguradora_nombre}`, aseguradora: r.aseguradora_nombre, plan: r.producto, prima_total: Number(r.prima_total), deducible: r.datos_ramo?.deducible, coaseguro: r.datos_ramo?.coaseguro, suma_asegurada: r.datos_ramo?.suma_asegurada, actual: true },
-    ...cots.map(k => ({ etiqueta: `${k.aseguradora}${k.plan ? ' ' + k.plan : ''}`, ...k }))] }));
+  // Al agregar cotizaciones, el análisis se vuelve a correr solo para decir cuál conviene
+  const conCots = async (nuevas, aviso) => { await guardar({ cotizaciones: nuevas }); toast(aviso); location.hash = '#/renovacion/' + p.id + '?auto'; refrescar(); };
+  main.querySelector('#aCot').onclick = () => formCotizacion(async k => conCots([...cots, k], 'Cotización agregada. Actualizando el análisis…'), p.cliente_id, { opciones: res?.opciones });
+  main.querySelector('#aVarias').onchange = async ev => {
+    const files = [...ev.target.files]; if (!files.length) return; const msg = main.querySelector('#aVarMsg'); const nuevas = [];
+    for (const [i, file] of files.entries()) {
+      msg.style.color = ''; msg.textContent = `Leyendo cotización ${i + 1} de ${files.length}: ${file.name}…`;
+      try { nuevas.push(await leerCotizacion(file, p.cliente_id, res?.opciones)); }
+      catch (err) { msg.style.color = 'var(--bad)'; msg.textContent = `${file.name}: ${err.message}`; }
+    }
+    if (nuevas.length) await conCots([...cots, ...nuevas], `${nuevas.length} cotización${nuevas.length > 1 ? 'es' : ''} agregada${nuevas.length > 1 ? 's' : ''}. Revise los datos en el cuadro; el análisis se actualiza.`);
+  };
+  main.querySelectorAll('[data-edc]').forEach(b => b.onclick = () => { const i = Number(b.dataset.edc); formCotizacion(async k => conCots(cots.map((x, j) => j === i ? { ...x, ...k } : x), 'Cotización actualizada.'), p.cliente_id, { cot: cots[i], opciones: res?.opciones }); });
+  main.querySelector('#aCmp')?.addEventListener('click', () => {
+    const mejor = res?.comparacion?.mejor;
+    abrirComparativo({ para: p.cliente_nombre, ramo: p.ramo, clienteId: p.cliente_id, opciones: [
+      { etiqueta: `Renovación ${r.aseguradora_nombre}`, aseguradora: r.aseguradora_nombre, plan: r.producto, prima_total: Number(r.prima_total), deducible: r.datos_ramo?.deducible, coaseguro: r.datos_ramo?.coaseguro, suma_asegurada: r.datos_ramo?.suma_asegurada, actual: true, recomendada: mejor === 'renovacion' },
+      ...cots.map((k, i) => ({ etiqueta: `${k.aseguradora}${k.plan ? ' ' + k.plan : ''}`, ...k, recomendada: mejor === i }))] });
+  });
   main.querySelectorAll('[data-delc]').forEach(b => b.onclick = async () => { const n = cots.filter((_, i) => i !== Number(b.dataset.delc)); await guardar({ cotizaciones: n }); refrescar(); });
   main.querySelectorAll('[data-verc]').forEach(b => b.onclick = () => abrirArchivo(cots[Number(b.dataset.verc)].archivo_ruta));
   const bIA = main.querySelector('#aIA');
@@ -345,13 +356,54 @@ export async function vistaAnalisis(main, polizaId, vigente) {
       const entrada = paraIA(e, cots);
       const x = await extraerConIA(INSTRUCCION_RENOVACION, { texto: JSON.stringify(entrada, null, 1) });
       if (!x || !Array.isArray(x.opciones)) throw new Error('La lectura automática no devolvió una propuesta. Intente de nuevo.');
-      await guardar({ resultado: { ...x, generado_en: new Date().toISOString() }, entrada });
-      box.innerHTML = pintarResultado(x, e.analisis); conectarResultado(box, e, x);
-      bIA.textContent = 'Volver a analizar'; bIA.classList.remove('primary');
+      await guardar({ resultado: { ...x, n_cotizaciones: cots.length, generado_en: new Date().toISOString() }, entrada });
+      history.replaceState(null, '', '#/renovacion/' + p.id);
+      refrescar(); return;
     } catch (err) { box.innerHTML = `<p class="error">${esc(err.message)}</p>`; }
     bIA.disabled = false;
   };
-  if (res) conectarResultado(main.querySelector('#aRes'), e, res);
+  if (res) conectarResultado(main.querySelector('#aRes'), e, res, cots, p => formCotizacion(async k => conCots([...cots, k], 'Cotización agregada. Actualizando el análisis…'), e.p.cliente_id, p));
+  // Recién cargada la renovación (o con cotizaciones nuevas), el análisis corre solo
+  if (bIA && /[?&]auto\b/.test(location.hash) && (!res || (res.n_cotizaciones ?? 0) !== cots.length)) bIA.click();
+  else if (/[?&]auto\b/.test(location.hash)) history.replaceState(null, '', '#/renovacion/' + p.id);
+}
+
+// Cuadro comparativo: año anterior, renovación y cada cotización, fila por fila
+function cuadro(e, cots, res) {
+  const { p, r } = e;
+  if (!r) return '<p class="muted small" style="margin:0">Cargue la renovación para comparar.</p>';
+  const camposR = (CAMPOS_RAMO[p.ramo] || []).filter(([k]) => !['deducible', 'coaseguro', 'suma_asegurada'].includes(k));
+  const cols = [
+    { tit: 'Año anterior', sub: p.numero_poliza || '', aseguradora: p.aseguradora_nombre, plan: p.producto, prima: Number(p.prima_total), moneda: p.moneda, dr: p.datos_ramo || {}, forma: FORMAS[p.forma_pago], tipo: 'anterior' },
+    { tit: 'Renovación', sub: r.numero_poliza || '', aseguradora: r.aseguradora_nombre, plan: r.producto, prima: Number(r.prima_total), moneda: r.moneda, dr: r.datos_ramo || {}, forma: FORMAS[r.forma_pago], tipo: 'renovacion' },
+    ...cots.map((k, i) => ({ tit: `Cotización ${i + 1}`, sub: k.opcion || '', aseguradora: k.aseguradora, plan: k.plan, prima: Number(k.prima_total) || null, moneda: r.moneda,
+      dr: { deducible: k.deducible, coaseguro: k.coaseguro, suma_asegurada: k.suma_asegurada, nivel_hospitalario: k.nivel_hospitalario, tope_coaseguro: k.tope_coaseguro }, forma: k.forma_pago, notas: k.notas, tipo: 'cot', i })),
+  ];
+  const ofertas = cols.slice(1).filter(c => c.prima > 0), barata = ofertas.length > 1 ? Math.min(...ofertas.map(c => c.prima)) : null;
+  const mejor = res && (res.n_cotizaciones ?? 0) === cots.length ? res.comparacion?.mejor : undefined;
+  const esMejor = c => (mejor === 'renovacion' && c.tipo === 'renovacion') || (c.tipo === 'cot' && mejor === c.i);
+  const dif = (a, b) => a && b ? Math.round((a - b) / b * 1000) / 10 : null;
+  const pctPill = v => v == null ? '<span class="muted">—</span>' : `<span class="pill ${v < 0 ? 'p-ok' : v > 0 ? 'p-bad' : 'p-gray'}">${v > 0 ? '+' : ''}${v}%</span>`;
+  const filaT = (lbl, f, resaltar = true) => { const vals = cols.map(f); const distintos = resaltar && new Set(vals.slice(1).map(v => String(v ?? ''))).size > 1;
+    return `<tr><th scope="row">${lbl}</th>${vals.map((v, i) => `<td class="${esMejor(cols[i]) ? 'mejor' : ''}"${distintos && i > 0 ? ' style="font-weight:600"' : ''}>${v == null || v === '' ? '<span class="muted">—</span>' : v}</td>`).join('')}</tr>`; };
+  return `<div class="tbl-wrap"><table class="cuadro">
+    <thead><tr><th></th>${cols.map(c => `<th class="${esMejor(c) ? 'mejor' : ''}">${esc(c.tit)}${esMejor(c) ? ' <span class="pill p-ok">Recomendada</span>' : ''}<div class="muted small" style="font-weight:400">${esc(c.sub)}</div></th>`).join('')}</tr></thead>
+    <tbody>
+      ${filaT('Aseguradora', c => `<b>${esc(c.aseguradora || '')}</b>`)}
+      ${filaT('Plan', c => esc(c.plan || ''))}
+      ${filaT('Prima total anual', c => c.prima ? `<span class="num"${c.prima === barata && c.tipo !== 'anterior' ? ' style="color:var(--ok);font-weight:700"' : ''}>${money(c.prima, c.moneda)}</span>${c.prima === barata && c.tipo !== 'anterior' ? '<div class="small" style="color:var(--ok)">La más barata</div>' : ''}` : '', false)}
+      ${filaT('vs. renovación', c => c.tipo === 'anterior' ? '' : c.tipo === 'renovacion' ? '<span class="muted small">base</span>' : `${pctPill(dif(c.prima, cols[1].prima))}${c.prima ? `<div class="small muted">${c.prima - cols[1].prima >= 0 ? '+' : '−'}${money(Math.abs(c.prima - cols[1].prima), c.moneda)}</div>` : ''}`, false)}
+      ${filaT('vs. año anterior', c => c.tipo === 'anterior' ? '<span class="muted small">base</span>' : pctPill(cols[0].moneda === c.moneda ? dif(c.prima, cols[0].prima) : null), false)}
+      ${filaT('Deducible', c => esc(c.dr.deducible || ''))}
+      ${filaT('Coaseguro', c => esc([c.dr.coaseguro, c.dr.tope_coaseguro ? 'tope ' + c.dr.tope_coaseguro : ''].filter(Boolean).join(' · ')))}
+      ${filaT('Suma asegurada', c => esc(c.dr.suma_asegurada || ''))}
+      ${p.ramo === 'gmm' ? filaT('Nivel hospitalario', c => esc(c.dr.nivel_hospitalario || '')) : ''}
+      ${camposR.map(([k, l]) => filaT(esc(l), c => esc(c.dr[k] || ''))).join('')}
+      ${filaT('Forma de pago', c => esc(c.forma || ''))}
+      ${cots.some(k => k.notas) ? filaT('Notas', c => `<span class="small">${esc(c.notas || '')}</span>`, false) : ''}
+    </tbody></table></div>
+    ${mejor !== undefined && res.comparacion?.explicacion ? `<p class="small" style="margin:12px 0 0"><b>Cuál conviene:</b> ${esc(res.comparacion.explicacion)}</p>` : ''}
+    ${!cots.length ? '<p class="muted small" style="margin:10px 0 0">Al subir cotizaciones aparecen aquí como columnas, junto al año anterior y la renovación.</p>' : ''}`;
 }
 
 // Lo que se le manda a la IA: solo lo necesario, sin datos de contacto
@@ -370,7 +422,7 @@ function paraIA(e, cots) {
   };
 }
 
-function pintarResultado(x, an) {
+function pintarResultado(x, an, cots = []) {
   const op = [...(x.opciones || [])].sort((a, b) => (a.prioridad || 9) - (b.prioridad || 9));
   return `
     <p style="margin-top:0">${esc(x.resumen || '')}</p>
@@ -382,7 +434,8 @@ function pintarResultado(x, an) {
       ${o.riesgos?.length ? `<div class="small"><b>A considerar:</b><ul>${o.riesgos.map(v => `<li>${esc(v)}</li>`).join('')}</ul></div>` : ''}
       ${o.que_cotizar ? `<p class="small cotizar"><b>Qué cotizar:</b> ${esc(o.que_cotizar)}</p>` : ''}
       ${o.efecto_prima ? `<p class="small muted" style="margin:6px 0 0">${esc(o.efecto_prima)}</p>` : ''}
-      <div class="filters" style="margin-top:10px"><button type="button" class="btn sm" data-tarea="${i}">Crear tarea</button></div>
+      ${o.tipo !== 'igual' ? (() => { const ks = cots.filter(k => k.opcion === o.titulo); return ks.length ? `<p class="small" style="margin:6px 0 0;color:var(--ok)">✓ ${ks.length} cotización${ks.length > 1 ? 'es' : ''} subida${ks.length > 1 ? 's' : ''} para esta opción</p>` : ''; })() : ''}
+      <div class="filters" style="margin-top:10px">${o.tipo !== 'igual' ? `<button type="button" class="btn sm primary" data-cotop="${i}">Subir cotización</button>` : ''}<button type="button" class="btn sm" data-tarea="${i}">Crear tarea</button></div>
     </article>`).join('')}</div>
     ${x.preguntas_al_cliente?.length ? `<div class="small" style="margin-top:14px"><b>Antes de decidir, pregunte al cliente:</b><ul>${x.preguntas_al_cliente.map(v => `<li>${esc(v)}</li>`).join('')}</ul></div>` : ''}
     ${x.mensaje_cliente ? `<div style="margin-top:14px"><label for="aMsg" class="lbl">Mensaje para el cliente</label>
@@ -391,8 +444,10 @@ function pintarResultado(x, an) {
     <p class="muted small" style="margin:14px 0 0">Sugerencia generada con IA a partir de los datos registrados${an?.resultado?.generado_en ? ` el ${fdate(an.resultado.generado_en.slice(0, 10))}` : ''}. Confirme condiciones, edades de aceptación y precios con cada aseguradora antes de proponerla.</p>`;
 }
 
-function conectarResultado(box, e, x) {
+function conectarResultado(box, e, x, cots = [], abrirCot = null) {
   const op = [...(x.opciones || [])].sort((a, b) => (a.prioridad || 9) - (b.prioridad || 9));
+  box.querySelectorAll('[data-cotop]').forEach(b => b.onclick = () => { const o = op[Number(b.dataset.cotop)];
+    abrirCot?.({ opciones: x.opciones, opcion: o.titulo, cot: o.tipo === 'ajuste' ? { aseguradora: e.r?.aseguradora_nombre || e.p.aseguradora_nombre } : null }); });
   box.querySelectorAll('[data-tarea]').forEach(b => b.onclick = () => {
     const o = op[Number(b.dataset.tarea)];
     formTarea({ prefill: { titulo: `${o.tipo === 'igual' ? 'Confirmar renovación' : 'Cotizar'}: ${o.titulo} — ${e.p.cliente_nombre}`.slice(0, 160), tipo: o.tipo === 'igual' ? 'renovacion' : 'cotizacion', prioridad: 'alta',
@@ -405,21 +460,34 @@ function conectarResultado(box, e, x) {
 }
 
 // Cotización de otra aseguradora (manual o leída del PDF)
-function formCotizacion(alGuardar, clienteId) {
-  let archivo = null;
+async function leerCotizacion(file, clienteId) {
+  const x = await extraerConIA(INSTRUCCION_COTIZACION, await leerPdf(file, { maxPaginas: 6 }));
+  if (!x?.aseguradora && !Number(x?.prima_total)) throw new Error('No encontré aseguradora ni prima en el PDF; agréguela a mano.');
+  const k = { aseguradora: txt(x.aseguradora) || 'Sin nombre', plan: txt(x.plan), prima_total: Number(x.prima_total) || null, deducible: txt(x.deducible), coaseguro: txt(x.coaseguro), tope_coaseguro: txt(x.tope_coaseguro),
+    suma_asegurada: txt(x.suma_asegurada), nivel_hospitalario: txt(x.nivel_hospitalario), forma_pago: txt(x.forma_pago), notas: txt(x.notas), agregada: hoyISO() };
+  k.archivo_ruta = await subirArchivo(file, clienteId, 'cotizaciones');
+  return k;
+}
+function formCotizacion(alGuardar, clienteId, { cot = null, opciones = null, opcion = null } = {}) {
+  let archivo = null; const k0 = cot || {};
+  const ops = (opciones || []).filter(o => o.tipo !== 'igual');
   modal({
-    titulo: 'Agregar cotización', boton: 'Agregar',
+    titulo: cot?.prima_total ? 'Editar cotización' : 'Agregar cotización', boton: cot?.prima_total ? 'Guardar' : 'Agregar',
     cuerpo: `<div class="pdf-box"><div><b>¿Tiene el PDF de la cotización?</b><div class="muted small">Súbalo y se llenan los datos.</div></div>
         <label class="btn sm primary" for="cPdf" style="cursor:pointer">Leer PDF</label><input type="file" id="cPdf" class="sr" accept="application/pdf,.pdf"></div>
       <p id="cPdfMsg" class="small" role="status" style="margin:0 0 12px"></p>
       <div class="form-grid">
-        <div class="field"><label for="cAseg">Aseguradora *</label><input id="cAseg" name="aseguradora" list="cAsegL" required><datalist id="cAsegL">${ctx.aseguradoras.map(a => `<option value="${esc(a.nombre)}">`).join('')}</datalist></div>
-        ${input('Plan o producto', 'plan')}
-        ${input('Prima total anual', 'prima_total', { type: 'number', req: true, attrs: 'step="0.01" min="0"' })}
-        ${input('Deducible', 'deducible')}
-        ${input('Coaseguro', 'coaseguro')}
-        ${input('Suma asegurada', 'suma_asegurada')}
-        ${textarea('Notas (tope de coaseguro, nivel hospitalario, exclusiones…)', 'notas', '')}
+        ${ops.length ? select('Opción del análisis', 'opcion', `<option value="">— Ninguna en particular —</option>${ops.map(o => `<option value="${esc(o.titulo)}"${o.titulo === (opcion || k0.opcion) ? ' selected' : ''}>${esc(o.titulo)}</option>`).join('')}`, { wide: true }) : ''}
+        <div class="field"><label for="cAseg">Aseguradora *</label><input id="cAseg" name="aseguradora" list="cAsegL" required value="${esc(k0.aseguradora || '')}"><datalist id="cAsegL">${ctx.aseguradoras.map(a => `<option value="${esc(a.nombre)}">`).join('')}</datalist></div>
+        ${input('Plan o producto', 'plan', { value: k0.plan || '' })}
+        ${input('Prima total anual', 'prima_total', { type: 'number', req: true, value: k0.prima_total ?? '', attrs: 'step="0.01" min="0"' })}
+        ${input('Deducible', 'deducible', { value: k0.deducible || '' })}
+        ${input('Coaseguro', 'coaseguro', { value: k0.coaseguro || '' })}
+        ${input('Tope de coaseguro', 'tope_coaseguro', { value: k0.tope_coaseguro || '' })}
+        ${input('Suma asegurada', 'suma_asegurada', { value: k0.suma_asegurada || '' })}
+        ${input('Nivel hospitalario', 'nivel_hospitalario', { value: k0.nivel_hospitalario || '' })}
+        ${input('Forma de pago cotizada', 'forma_pago', { value: k0.forma_pago || '' })}
+        ${textarea('Notas (exclusiones, periodos de espera, reconocimiento de antigüedad…)', 'notas', k0.notas || '')}
       </div>`,
     onOpen: f => {
       f.querySelector('#cPdf').onchange = async ev => {
@@ -427,14 +495,15 @@ function formCotizacion(alGuardar, clienteId) {
         msg.style.color = ''; msg.textContent = 'Leyendo la cotización…';
         try {
           const x = await extraerConIA(INSTRUCCION_COTIZACION, await leerPdf(file, { maxPaginas: 6 }));
-          ['aseguradora', 'plan', 'deducible', 'coaseguro', 'suma_asegurada', 'notas'].forEach(k => { if (x?.[k] && f[k]) f[k].value = x[k]; });
+          ['aseguradora', 'plan', 'deducible', 'coaseguro', 'tope_coaseguro', 'suma_asegurada', 'nivel_hospitalario', 'forma_pago', 'notas'].forEach(k => { if (x?.[k] && f[k]) f[k].value = x[k]; });
           if (Number(x?.prima_total) > 0) f.prima_total.value = Number(x.prima_total);
           archivo = file; msg.style.color = 'var(--ok)'; msg.textContent = 'Datos leídos. Revíselos antes de agregar.';
         } catch (err) { msg.style.color = 'var(--bad)'; msg.textContent = err.message; }
       };
     },
     onSubmit: async d => {
-      const k = { aseguradora: txt(d.aseguradora), plan: txt(d.plan), prima_total: num(d.prima_total), deducible: txt(d.deducible), coaseguro: txt(d.coaseguro), suma_asegurada: txt(d.suma_asegurada), notas: txt(d.notas), agregada: hoyISO() };
+      const k = { ...k0, aseguradora: txt(d.aseguradora), plan: txt(d.plan), prima_total: num(d.prima_total), deducible: txt(d.deducible), coaseguro: txt(d.coaseguro), tope_coaseguro: txt(d.tope_coaseguro),
+        suma_asegurada: txt(d.suma_asegurada), nivel_hospitalario: txt(d.nivel_hospitalario), forma_pago: txt(d.forma_pago), notas: txt(d.notas), opcion: txt(d.opcion) || opcion || k0.opcion || null, agregada: k0.agregada || hoyISO() };
       if (!k.aseguradora || !k.prima_total) throw new Error('Escriba la aseguradora y la prima.');
       if (archivo) k.archivo_ruta = await subirArchivo(archivo, clienteId, 'cotizaciones');
       await alGuardar(k);

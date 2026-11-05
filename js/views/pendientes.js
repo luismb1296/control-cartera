@@ -13,7 +13,7 @@ export async function calcularPendientes() {
   const [recibos, polizas, abiertas, tramites, prospectos, clientes, docs, comentarios, lecturas, movs, polMov] = await Promise.all([
     q(sb.from('v_recibos').select('*').eq('estatus', 'pendiente').lte('fecha_limite', en3).order('fecha_limite')),
     q(sb.from('v_polizas').select('*').eq('estatus', 'activa').lte('fin_vigencia', en15).order('fin_vigencia')),
-    q(sb.from('tareas').select('*').neq('estatus', 'listo').order('fecha')),
+    q(sb.from('tareas').select('*').eq('hecha', false).order('fecha')),
     q(sb.from('tramites').select('*')),
     q(sb.from('prospectos').select('*').lte('fecha_seguimiento', h).order('fecha_seguimiento')),
     q(sb.from('clientes').select('id,nombre,fecha_nacimiento,tipo_persona,telefono,whatsapp,email,activo,agente_id').eq('activo', true)),

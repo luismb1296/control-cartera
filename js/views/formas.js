@@ -4,7 +4,7 @@ import { leerPdf, extraerConIA, INSTRUCCION_POLIZA } from '../ia.js';
 import {
   esc, modal, input, select, textarea, opts, optsList, RAMOS, FORMAS, CONDUCTOS, CAMPOS_RAMO, DOCS, DOCS_CLIENTE,
   num, txt, toast, parseD, iso, addMonths, hoyISO, money, fdate, TIPOS_MOV, EST_MOV, pill
-, numRecibo } from '../ui.js';
+, numRecibo, pctSugerido, ORIGEN_COMISION } from '../ui.js';
 
 // ---------------------------------------------------------------- Cliente
 export function formCliente(cliente, alGuardar) {
@@ -98,6 +98,7 @@ export async function formPoliza({ poliza, clienteId, modo = 'nueva', alGuardar,
       ${input('Prima neta anual', 'prima_neta', { type: 'number', value: base.prima_neta, req: true, attrs: 'step="0.01" min="0"' })}
       ${input('Prima total anual', 'prima_total', { type: 'number', value: base.prima_total, req: true, attrs: 'step="0.01" min="0"' })}
       ${input('% de comisión', 'pct_comision', { type: 'number', value: base.pct_comision ?? '', attrs: 'step="0.01" min="0" max="100"' })}
+      <p class="muted small wide" id="comNota" role="status" style="margin:0"></p>
       ${input('Días para pagar el primer recibo', 'dias_primer_pago', { type: 'number', value: base.dias_primer_pago, attrs: 'min="0" data-d1' })}
       ${input('Días para pagar los siguientes recibos', 'dias_gracia', { type: 'number', value: base.dias_gracia, attrs: 'min="0" data-d2' })}
       <p class="muted small wide" id="plazoNota" style="margin:0"></p>
@@ -136,14 +137,33 @@ export async function formPoliza({ poliza, clienteId, modo = 'nueva', alGuardar,
           lista.map(x => `<option value="${x.id}"${x.id === base.producto_id ? ' selected' : ''}>${esc(x.nombre)}</option>`).join('');
         sP.disabled = !lista.length;
       };
+      // Comisión: se calcula con el producto (tabla por edad, primer año o renovación) mientras no se escriba a mano
+      let comTocada = modo === 'editar', origenCom = modo === 'editar' ? (base.comision_origen || null) : null;
+      const comNota = form.querySelector('#comNota');
+      const sugerir = () => {
+        const pr = ctx.productos.find(x => x.id === sP.value);
+        const personas = lineas(form.asegurados.value).map(p => ({ nombre: p[0], parentesco: p[1], fecha_nacimiento: /^\d{4}-\d{2}-\d{2}$/.test(p[2] || '') ? p[2] : null }));
+        const sg = pctSugerido(pr, personas, form.inicio_vigencia.value || hoyISO(), modo === 'renovar' || !!base.poliza_anterior_id);
+        const actual = form.pct_comision.value === '' ? null : Number(form.pct_comision.value);
+        if (sg && !comTocada) { form.pct_comision.value = sg.pct; origenCom = sg.origen; }
+        if (!sg) { comNota.innerHTML = origenCom ? `Comisión ${esc(ORIGEN_COMISION[origenCom] || origenCom)}.` : ''; return; }
+        const difiere = comTocada && actual !== sg.pct;
+        comNota.innerHTML = `${esc(sg.texto)}${difiere ? ` Esta póliza tiene ${actual ?? 0}%${origenCom ? ` (${esc(ORIGEN_COMISION[origenCom] || origenCom)})` : ''}. <button type="button" class="linkbtn small" id="comUsar">Usar ${sg.pct}%</button>` : ''}`;
+        comNota.querySelector('#comUsar')?.addEventListener('click', () => { form.pct_comision.value = sg.pct; origenCom = sg.origen; comTocada = false; sugerir(); });
+      };
+      form.pct_comision.addEventListener('input', () => { comTocada = true; origenCom = 'manual'; sugerir(); });
+      form.asegurados.addEventListener('input', sugerir);
+      form.inicio_vigencia.addEventListener('change', sugerir);
       sP.onchange = () => {
         const x = plazos(); llenarPlazos(true);
-        if (x.pr) { form.producto.value = x.pr.nombre; if (x.pr.pct_comision != null) form.pct_comision.value = Number(x.pr.pct_comision); }
+        if (x.pr) form.producto.value = x.pr.nombre;
+        sugerir();
       };
+      form._sugerirComision = sugerir; form._origenCom = () => origenCom;
       form.aseguradora_id.onchange = () => { productos(); llenarPlazos(true); };
       productos(); llenarPlazos(false);
-      form.ramo.onchange = () => { base.datos_ramo = leerDatosRamo(form); pintar(); productos(); llenarPlazos(true); };
-      pintar();
+      form.ramo.onchange = () => { base.datos_ramo = leerDatosRamo(form); pintar(); productos(); llenarPlazos(true); sugerir(); };
+      pintar(); sugerir();
       // Lectura automática del PDF de la póliza
       const msg = form.querySelector('#polPdfMsg');
       form.querySelector('#polPdf').onchange = async e => {
@@ -153,7 +173,7 @@ export async function formPoliza({ poliza, clienteId, modo = 'nueva', alGuardar,
           const contenido = await leerPdf(file);
           const x = await extraerConIA(INSTRUCCION_POLIZA, contenido);
           const avisos = aplicarDatosPoliza(form, x, { clientes, clienteId, poliza });
-          pdfPoliza = file;
+          pdfPoliza = file; form._sugerirComision?.();
           msg.style.color = 'var(--ok)'; msg.innerHTML = `Datos leídos del PDF. <b>Revíselos antes de guardar.</b>${avisos.length ? '<br>' + avisos.map(esc).join('<br>') : ''}`;
           const crear = form.querySelector('#crearDesdePdf');
           if (crear) crear.onclick = async () => {
@@ -183,20 +203,27 @@ export async function formPoliza({ poliza, clienteId, modo = 'nueva', alGuardar,
         producto_id: d.producto_id || null, dias_primer_pago: num(d.dias_primer_pago), dias_gracia: num(d.dias_gracia), agente_id: d.agente_id || ctx.perfil.id,
         datos_ramo: leerDatosRamo(form), notas: txt(d.notas)
       };
+      // De dónde salió el % (si la base aún no tiene la columna del ajuste 19, se guarda sin ella)
+      const origen = form.querySelector('#comNota') ? (Number(fila.pct_comision) === Number(poliza?.pct_comision) && modo === 'editar' ? (poliza.comision_origen ?? null) : null) : null;
+      const conOrigen = async op => { try { return await op({ ...fila, comision_origen: form._origenCom?.() ?? origen }); } catch (e) { if (/comision_origen/.test(e.message)) return op(fila); throw e; } };
       let guardada;
       if (modo === 'editar') {
-        guardada = await q(sb.from('polizas').update(fila).eq('id', poliza.id).select().single());
+        guardada = await conOrigen(f => q(sb.from('polizas').update(f).eq('id', poliza.id).select().single()));
         const cambio = ['inicio_vigencia', 'fin_vigencia', 'forma_pago', 'prima_neta', 'prima_total', 'pct_comision', 'dias_gracia', 'dias_primer_pago']
           .some(k => String(fila[k]) !== String(poliza[k]));
         if (cambio) {
           const { error } = await sb.rpc('regenerar_recibos', { p_poliza: poliza.id });
-          if (error) toast('Póliza guardada. Los recibos no se recalcularon porque ya hay pagos; ajústelos en Cobranza.', true);
+          if (error) {
+            // Con pagos no se regeneran, pero la comisión esperada sí se actualiza en los recibos cuya comisión no ha llegado
+            if (Number(fila.pct_comision) !== Number(poliza.pct_comision)) await sb.rpc('ajustar_comision', { p_poliza: poliza.id, p_pct: fila.pct_comision, p_origen: form._origenCom?.() || 'manual' });
+            toast('Póliza guardada. Los recibos no se recalcularon porque ya hay pagos; ajústelos en Cobranza.', true);
+          }
         }
         await q(sb.from('asegurados').delete().eq('poliza_id', poliza.id));
       } else {
         fila.cliente_id = clienteId || poliza?.cliente_id || d.cliente_id;
         if (modo === 'renovar') fila.poliza_anterior_id = poliza.id;
-        guardada = await q(sb.from('polizas').insert(fila).select().single());
+        guardada = await conOrigen(f => q(sb.from('polizas').insert(f).select().single()));
       }
       const personas = [
         ...lineas(d.asegurados).map(p => ({ tipo: 'asegurado', nombre: p[0], parentesco: p[1] || null, fecha_nacimiento: /^\d{4}-\d{2}-\d{2}$/.test(p[2] || '') ? p[2] : null,
@@ -375,4 +402,28 @@ function aplicarDatosPoliza(form, x, { clientes, clienteId, poliza }) {
   if (poliza && x.numero_poliza && poliza.numero_poliza && n(x.numero_poliza) === n(poliza.numero_poliza) && form.numero_poliza.value === poliza.numero_poliza)
     avisos.push('El número de póliza es el mismo que el de la póliza anterior; verifique que sea la renovación.');
   return avisos;
+}
+
+// ---------------------------------------------------------------- % de comisión real de una póliza
+export async function ajustarComision(p, alGuardar) {
+  const [asegurados, recibos] = await Promise.all([
+    q(sb.from('asegurados').select('nombre,parentesco,fecha_nacimiento,tipo').eq('poliza_id', p.id)),
+    q(sb.from('recibos').select('id,comision_recibida,estatus').eq('poliza_id', p.id)),
+  ]);
+  const pr = ctx.productos.find(x => x.id === p.producto_id);
+  const sg = pctSugerido(pr, asegurados.filter(a => a.tipo !== 'beneficiario'), p.inicio_vigencia, !!p.poliza_anterior_id);
+  const n = recibos.filter(r => r.comision_recibida == null && r.estatus !== 'cancelado').length;
+  modal({
+    titulo: `Comisión de la póliza ${p.numero_poliza || 's/n'}`, boton: 'Guardar',
+    cuerpo: `<p style="margin-top:0">Hoy: <b>${Number(p.pct_comision)}%</b>${p.comision_origen ? ` <span class="muted">(${esc(ORIGEN_COMISION[p.comision_origen] || p.comision_origen)})</span>` : ''}.</p>
+      ${sg ? `<p class="small">${esc(sg.texto)}${Number(sg.pct) !== Number(p.pct_comision) ? ` <button type="button" class="linkbtn small" id="acUsar">Usar ${sg.pct}%</button>` : ''}</p>` : ''}
+      <div class="form-grid">${input('% de comisión real de esta póliza', 'pct', { type: 'number', value: Number(p.pct_comision), req: true, attrs: 'step="0.01" min="0" max="100"' })}</div>
+      <p class="muted small" style="margin-bottom:0">Se actualiza la comisión esperada de ${n} recibo${n === 1 ? '' : 's'} cuya comisión aún no llega (aunque el cliente ya haya pagado). Las comisiones ya registradas no cambian. Tip: al conciliar el estado de cuenta de la aseguradora, la app le propone el % real de cada póliza.</p>`,
+    onOpen: f => { f.querySelector('#acUsar')?.addEventListener('click', () => { f.pct.value = sg.pct; f.pct.dataset.origen = sg.origen; }); f.pct.addEventListener('input', () => { delete f.pct.dataset.origen; }); },
+    onSubmit: async (d, f) => {
+      const { error } = await sb.rpc('ajustar_comision', { p_poliza: p.id, p_pct: num(d.pct), p_origen: f.pct.dataset.origen || 'manual' });
+      if (error) throw new Error(/ajustar_comision/.test(error.message) ? 'Falta actualizar la base de datos: corra el archivo 19_tableros_comisiones.sql en Supabase.' : error.message);
+      toast('Comisión actualizada.'); alGuardar?.();
+    }
+  });
 }

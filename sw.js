@@ -1,6 +1,6 @@
 // Service worker: permite instalar la app en el celular, abrirla sin internet (pantalla de la app)
 // y recibir notificaciones push. Los datos siempre vienen en vivo de Supabase; aquí no se guardan.
-const VERSION = 'cartera-v1';
+const VERSION = 'cartera-v2';
 const BASE = ['./', 'index.html', 'css/app.css', 'manifest.webmanifest', 'icons/icon-192.png'];
 
 self.addEventListener('install', e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(BASE)).then(() => self.skipWaiting())); });

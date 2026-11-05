@@ -106,6 +106,9 @@ export const TIPOS_TAREA = {
   siniestro: 'Siniestro', endoso: 'Endoso', cancelacion: 'Cancelación', cobranza: 'Cobranza', cotizacion: 'Cotización', otro: 'Otro'
 };
 export const EST_TAREA = { no_iniciado: 'No iniciado', en_proceso: 'En proceso', detenido: 'Detenido', listo: 'Listo' };
+// Tareas cerradas: terminadas (listo) o canceladas (no se hicieron). Van al archivo del tablero.
+export const CIERRE_TAREA = { listo: ['Terminada', 'p-ok'], cancelado: ['Cancelada', 'p-gray'] };
+export const tareaAbierta = t => !['listo', 'cancelado'].includes(t.estatus);
 export const PRIORIDADES = { baja: 'Baja', media: 'Media', alta: 'Alta', urgente: 'Urgente' };
 export const TAREA_A_TRAMITE = { reembolso: 'reembolso', programacion: 'programacion', siniestro: 'siniestro_danos' };
 
@@ -257,3 +260,33 @@ export function cargarPdfLib() {
     document.head.appendChild(s);
   });
 }
+
+// ---------------------------------------------------------------- Comisión por edad
+export function edadAl(nac, fecha) {
+  const n = parseD(nac), f = parseD(fecha); if (!n || !f) return null;
+  let e = f.getFullYear() - n.getFullYear(); if (f.getMonth() < n.getMonth() || (f.getMonth() === n.getMonth() && f.getDate() < n.getDate())) e--; return e;
+}
+// % de comisión que toca a una póliza según su producto: tabla por edad (titular o el de mayor edad), primer año o renovación
+// personas: [{ nombre, parentesco, fecha_nacimiento }] · devuelve { pct, origen, texto } o null
+export function pctSugerido(pr, personas, fecha, renovacion) {
+  if (!pr) return null;
+  const tabla = (pr.comision_tabla || []).filter(x => x && x.pct != null);
+  const base = renovacion && pr.pct_comision_renovacion != null ? Number(pr.pct_comision_renovacion) : pr.pct_comision != null ? Number(pr.pct_comision) : null;
+  const queAnio = renovacion ? 'renovación' : 'primer año';
+  if (tabla.length) {
+    const conEdad = (personas || []).map(p => ({ ...p, edad: edadAl(p.fecha_nacimiento, fecha) })).filter(p => p.edad != null);
+    const titular = conEdad.find(p => /titular|contratante/i.test(p.parentesco || '')) || conEdad[0];
+    const ref = pr.comision_edad_de === 'mayor' ? conEdad.sort((a, b) => b.edad - a.edad)[0] : titular;
+    if (ref) {
+      const f = tabla.find(x => ref.edad >= Number(x.desde ?? 0) && ref.edad <= Number(x.hasta ?? 200));
+      if (f) {
+        const pct = renovacion && f.pct_renovacion != null && f.pct_renovacion !== '' ? Number(f.pct_renovacion) : Number(f.pct);
+        return { pct, origen: 'tabla_edad', texto: `Tabla de ${pr.nombre}: ${ref.edad} años (${pr.comision_edad_de === 'mayor' ? 'asegurado de mayor edad' : 'titular'}), ${queAnio} → ${pct}%.` };
+      }
+      return base != null ? { pct: base, origen: 'producto', texto: `${ref.edad} años no está en la tabla de ${pr.nombre}; se usa el % general (${queAnio}): ${base}%.` } : null;
+    }
+    return base != null ? { pct: base, origen: 'producto', texto: `${pr.nombre} cambia la comisión con la edad: capture la fecha de nacimiento del titular para calcularla. Mientras, ${base}%.` } : null;
+  }
+  return base != null ? { pct: base, origen: 'producto', texto: `Comisión de ${pr.nombre} (${queAnio}): ${base}%.` } : null;
+}
+export const ORIGEN_COMISION = { producto: 'del producto', tabla_edad: 'por edad', manual: 'capturada a mano', estado_cuenta: 'real, del estado de cuenta' };

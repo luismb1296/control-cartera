@@ -25,7 +25,7 @@ export async function datosMes(anio, mes) {
     renovadas: terminan.filter(p => p.estatus === 'renovada'), perdidas: terminan.filter(p => p.estatus !== 'renovada' && (p.fin_vigencia < hoyStr() || p.seguimiento === 'no_renueva')),
     pendientesRen: terminan.filter(p => p.estatus === 'activa' && p.fin_vigencia >= hoyStr() && p.seguimiento !== 'no_renueva'),
     trAbiertos: tramites.filter(t => enMes(t.creado_en)), trPagados: tramites.filter(t => t.estatus === 'pagado' && enMes(t.actualizado_en)),
-    tareasHechas: tareas.filter(t => t.estatus === 'listo' && enMes(t.completada_en)), tareasAbiertas: tareas.filter(t => t.estatus !== 'listo'),
+    tareasHechas: tareas.filter(t => t.estatus === 'listo' && enMes(t.completada_en)), tareasAbiertas: tareas.filter(t => !t.hecha),
     sum,
   };
 }

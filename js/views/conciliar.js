@@ -45,16 +45,19 @@ export function emparejar(movs, recibos) {
     if (!elegido) elegido = [...cand].sort((a, b) => Math.abs(a.comision_esperada - m.comision) - Math.abs(b.comision_esperada - m.comision) || String(a.fecha_limite).localeCompare(String(b.fecha_limite)))[0];
     elegido.usado = true;
     const dif = Math.round((m.comision - Number(elegido.comision_esperada)) * 100) / 100;
-    return { ...m, recibo_id: elegido.id, rec: elegido, dif, estado: Math.abs(dif) <= 1 ? 'conciliado' : 'diferencia' };
+    // % real que pagó la aseguradora sobre la prima neta del recibo (o la prima que trae el estado de cuenta)
+    const base = Number(m.prima) > 0 ? Number(m.prima) : Number(elegido.prima_neta);
+    const pctReal = base > 0 ? Math.round(m.comision / base * 10000) / 100 : null;
+    return { ...m, recibo_id: elegido.id, rec: elegido, dif, pctReal, estado: Math.abs(dif) <= 1 ? 'conciliado' : 'diferencia' };
   });
 }
 
 export async function conciliarEstadoCuenta(alTerminar) {
   const [recibos, polizas] = await Promise.all([
     q(sb.from('v_recibos').select('*').eq('estatus', 'pagado').order('fecha_limite')),
-    q(sb.from('polizas').select('id,aseguradora_id')),
+    q(sb.from('polizas').select('id,aseguradora_id,pct_comision')),
   ]);
-  const asegDe = Object.fromEntries(polizas.map(p => [p.id, p.aseguradora_id]));
+  const asegDe = Object.fromEntries(polizas.map(p => [p.id, p.aseguradora_id])), pctDe = Object.fromEntries(polizas.map(p => [p.id, Number(p.pct_comision)]));
   let res = [], asegSel = '';
   const dlg = modal({
     titulo: 'Conciliar estado de cuenta de comisiones', boton: 'Registrar comisiones',
@@ -83,11 +86,14 @@ export async function conciliarEstadoCuenta(alTerminar) {
             <div class="chips"><span class="pill p-blue">${res.length} comisiones · ${money(total)}</span><span class="pill p-ok">${ok.length} coinciden</span>
               ${dif.length ? `<span class="pill p-warn">${dif.length} con diferencia</span>` : ''}${sin.length ? `<span class="pill p-bad">${sin.length} sin recibo en el sistema</span>` : ''}</div>
             <div class="tbl-wrap" style="margin-top:12px;max-height:300px;overflow:auto"><table>
-              <thead><tr><th></th><th>Póliza</th><th>Cliente / recibo</th><th class="num">Esperada</th><th class="num">Pagada</th><th>Resultado</th></tr></thead>
+              <thead><tr><th></th><th>Póliza</th><th>Cliente / recibo</th><th class="num">Esperada</th><th class="num">Pagada</th><th>Resultado</th><th>% real</th></tr></thead>
               <tbody>${res.map((r, i) => `<tr><td>${r.recibo_id ? `<label class="sr" for="cc${i}">Registrar</label><input type="checkbox" id="cc${i}" data-i="${i}" ${r.estado === 'conciliado' ? 'checked' : ''} style="width:auto;min-height:0">` : ''}</td>
                 <td class="nw">${esc(r.poliza)}</td><td>${r.rec ? `${esc(r.rec.cliente_nombre)}<div class="muted small">Recibo ${numRecibo(r.rec)} · pagado ${fdate(r.rec.fecha_pago)}</div>` : '<span class="muted">—</span>'}</td>
                 <td class="num">${r.rec ? money(r.rec.comision_esperada) : '—'}</td><td class="num">${money(r.comision)}</td>
-                <td>${r.estado === 'conciliado' ? '<span class="pill p-ok">Coincide</span>' : r.estado === 'diferencia' ? `<span class="pill p-warn">${r.dif > 0 ? '+' : ''}${money(r.dif)}</span>` : '<span class="pill p-bad">No encontrado</span>'}</td></tr>`).join('')}</tbody></table></div>
+                <td>${r.estado === 'conciliado' ? '<span class="pill p-ok">Coincide</span>' : r.estado === 'diferencia' ? `<span class="pill p-warn">${r.dif > 0 ? '+' : ''}${money(r.dif)}</span>` : '<span class="pill p-bad">No encontrado</span>'}</td>
+                <td class="small">${r.estado === 'diferencia' && r.pctReal != null && Math.abs(r.pctReal - pctDe[r.rec.poliza_id]) >= 0.05 ? `<label style="display:flex;gap:6px;align-items:flex-start;cursor:pointer"><input type="checkbox" data-pct="${i}" style="width:auto;min-height:0;margin-top:2px">
+                  <span><b>${r.pctReal}%</b> <span class="muted">(la póliza tiene ${pctDe[r.rec.poliza_id]}%)</span><br>Usar este % en la póliza</span></label>` : r.pctReal != null ? `<span class="muted">${r.pctReal}%</span>` : ''}</td></tr>`).join('')}</tbody></table></div>
+            ${res.some(r => r.estado === 'diferencia') ? '<p class="small" style="margin:10px 0 0"><b>% real:</b> lo que la aseguradora pagó entre la prima neta. Si marca «Usar este % en la póliza», se corrige el % de esa póliza y la comisión esperada de sus recibos que aún no se pagan, para que la próxima vez coincida (útil en gastos médicos, donde el % cambia con la edad).</p>' : ''}
             <p class="muted small">Las que coinciden ya están marcadas. Revise las que tienen diferencia y márquelas si las acepta. Las "no encontradas" son pólizas que no están en el sistema o recibos que aún no se marcan como pagados.</p>
             ${adeudo.length ? `<div class="card" style="margin-top:12px;border-color:var(--warn-line);background:var(--warn-bg)"><b>Posibles comisiones que la aseguradora le debe (${adeudo.length})</b>
               <p class="small" style="margin:4px 0 8px">Recibos pagados hace más de 45 días cuya comisión no viene en este estado de cuenta ni está registrada:</p>
@@ -101,7 +107,11 @@ export async function conciliarEstadoCuenta(alTerminar) {
       const marcados = [...f.querySelectorAll('[data-i]:checked')].map(c => res[Number(c.dataset.i)]);
       if (!marcados.length) throw new Error('Marque al menos una comisión para registrar.');
       for (const r of marcados) await q(sb.from('recibos').update({ comision_recibida: r.comision, fecha_comision: r.fecha || hoyISO() }).eq('id', r.recibo_id));
-      toast(`${marcados.length} comisiones registradas.`);
+      // % real por póliza (una vez por póliza)
+      const pcts = {}; [...f.querySelectorAll('[data-pct]:checked')].forEach(c => { const r = res[Number(c.dataset.pct)]; pcts[r.rec.poliza_id] = r.pctReal; });
+      let nAj = 0;
+      for (const [pid, pct] of Object.entries(pcts)) { const { error } = await sb.rpc('ajustar_comision', { p_poliza: pid, p_pct: pct, p_origen: 'estado_cuenta' }); if (error) toast(error.message, true); else nAj++; }
+      toast(`${marcados.length} comisiones registradas.${nAj ? ` Se actualizó el % de ${nAj} póliza${nAj > 1 ? 's' : ''}.` : ''}`);
       alTerminar?.();
     }
   });

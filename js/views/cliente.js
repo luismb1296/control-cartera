@@ -2,8 +2,8 @@ import { sb, ctx, q, puedeAdministrar, recargarCatalogos } from '../db.js';
 import {
   esc, money, fdate, modal, input, fdateShort, edad, iniciales, pill, waLink, toast, confirmar, hoy, parseD, sum,
   RAMOS, FORMAS, CONDUCTOS, CAMPOS_RAMO, SITUACION, SIT_RECIBO, SEGUIMIENTO, DOCS, TIPOS_TRAMITE, EST_TRAMITE, TIPOS_TAREA, EST_TAREA
-, numRecibo, periodosDescubiertos, diasDescubierto, hoyISO, iso, addDays } from '../ui.js';
-import { formCliente, formPoliza, formPago, formDocumento, abrirArchivo, marcarNoRenueva, verMovimientos } from './formas.js';
+, numRecibo, periodosDescubiertos, diasDescubierto, hoyISO, iso, addDays, ORIGEN_COMISION } from '../ui.js';
+import { formCliente, formPoliza, formPago, formDocumento, abrirArchivo, marcarNoRenueva, verMovimientos, ajustarComision } from './formas.js';
 import { formTramite, verTramite, atorado } from './tramites.js';
 import { enviarMensaje } from './mensajes.js';
 import { formTarea, verTarea } from './tablero.js';
@@ -78,7 +78,7 @@ export async function vistaCliente(main, id, vigente) {
     <button type="button" role="tab" aria-selected="true" data-tab="pol">Pólizas (${activas.length})</button>
     <button type="button" role="tab" aria-selected="false" data-tab="pag">Pagos (${recibos.length})</button>
     <button type="button" role="tab" aria-selected="false" data-tab="tra">Trámites (${tramites.length})</button>
-    <button type="button" role="tab" aria-selected="false" data-tab="act">Actividad (${tareas.filter(t => t.estatus !== 'listo').length} abiertas)</button>
+    <button type="button" role="tab" aria-selected="false" data-tab="act">Actividad (${tareas.filter(t => !t.hecha).length} abiertas)</button>
     ${historial.length ? `<button type="button" role="tab" aria-selected="false" data-tab="his">Pólizas anteriores (${historial.length})</button>` : ''}
   </div>
 
@@ -140,7 +140,7 @@ export async function vistaCliente(main, id, vigente) {
         <div><div class="lbl">Prima total</div><div class="val">${money(p.prima_total, p.moneda)}</div></div>
         <div><div class="lbl">Recibos pagados</div><div class="val">${pagados} de ${rec.length}</div></div>
         <div><div class="lbl">Plazo de pago</div><div class="val">${p.dias_primer_pago ?? p.dias_gracia ?? 30} días el primero${p.forma_pago !== 'contado' ? ` · ${p.dias_gracia ?? 30} los siguientes` : ''}</div></div>
-        <div><div class="lbl">Comisión</div><div class="val">${Number(p.pct_comision)}%</div></div>
+        <div><div class="lbl">Comisión</div><div class="val">${Number(p.pct_comision)}%${p.comision_origen ? ` <span class="muted small">${esc(ORIGEN_COMISION[p.comision_origen] || '')}</span>` : ''} <button type="button" class="linkbtn small" data-com="${p.id}">Ajustar</button></div></div>
         ${extras}
         ${aseg.length ? `<div><div class="lbl">Asegurados</div><div class="val">${aseg.map(a => esc(a.nombre + (a.parentesco ? ` (${a.parentesco})` : ''))).join('<br>')}</div></div>` : ''}
         ${ben.length ? `<div><div class="lbl">Beneficiarios</div><div class="val">${ben.map(a => esc(a.nombre + (a.porcentaje != null ? ` · ${Number(a.porcentaje)}%` : ''))).join('<br>')}</div></div>` : ''}
@@ -183,7 +183,7 @@ export async function vistaCliente(main, id, vigente) {
           <div class="kpi"><div class="k">Siniestros</div><div class="v">${cuenta(tramites, esSin)}</div></div>
           <div class="kpi"><div class="k">Endosos</div><div class="v">${movs.length}</div></div>
           <div class="kpi"><div class="k">Emisiones y renovaciones</div><div class="v">${polizas.length}</div></div>
-          <div class="kpi"><div class="k">Tareas abiertas</div><div class="v">${cuenta(tareas, t => t.estatus !== 'listo')}</div></div>
+          <div class="kpi"><div class="k">Tareas abiertas</div><div class="v">${cuenta(tareas, t => !t.hecha)}</div></div>
         </div></div>
       <div class="card"><h2 style="margin-bottom:8px">Por póliza</h2><div class="tbl-wrap"><table>
         <thead><tr><th>Póliza</th><th>Vigencia</th><th class="num">Reembolsos</th><th class="num">Programaciones</th><th class="num">Siniestros</th><th class="num">Endosos</th><th class="num">Tareas</th></tr></thead>
@@ -193,7 +193,7 @@ export async function vistaCliente(main, id, vigente) {
       <div class="card"><h2 style="margin-bottom:8px">Tareas</h2>${tareas.length ? `<div class="tbl-wrap"><table>
         <thead><tr><th>Tarea</th><th>Tipo</th><th>Responsable</th><th>Fecha</th><th>Estado</th></tr></thead>
         <tbody>${tareas.map(t => `<tr class="click" data-tarea="${t.id}"><td>${esc(t.titulo)}</td><td>${esc(TIPOS_TAREA[t.tipo])}</td><td>${esc(quien[t.asignado_a] || '—')}</td>
-          <td class="nw">${t.fecha ? fdate(t.fecha) : '—'}</td><td><span class="mcell st-${t.estatus}" style="display:inline-block;width:auto;padding:4px 10px">${EST_TAREA[t.estatus]}</span></td></tr>`).join('')}</tbody></table></div>`
+          <td class="nw">${t.fecha ? fdate(t.fecha) : '—'}</td><td><span class="mcell st-${t.estatus}" style="display:inline-block;width:auto;padding:4px 10px">${EST_TAREA[t.estatus] || 'Cancelada'}</span></td></tr>`).join('')}</tbody></table></div>`
         : '<div class="empty">Este cliente no tiene tareas.</div>'}</div>`;
     },
     tra: () => `<div class="card"><div class="card-head"><h2>Siniestros, reembolsos y trámites</h2><button type="button" class="btn sm primary" id="nTra">+ Nuevo trámite</button></div>
@@ -238,6 +238,7 @@ export async function vistaCliente(main, id, vigente) {
         await sb.storage.from('documentos').remove([doc.ruta]);
         await q(sb.from('documentos').delete().eq('id', doc.id)); toast('Documento borrado.'); refrescar();
       }
+      else if (d.com) ajustarComision(polizas.find(p => p.id === d.com), refrescar);
       else if (d.edit) formPoliza({ poliza: polizas.find(p => p.id === d.edit), modo: 'editar', alGuardar: refrescar });
       else if (d.ren) formPoliza({ poliza: polizas.find(p => p.id === d.ren), modo: 'renovar', alGuardar: refrescar });
       else if (d.cancel) {

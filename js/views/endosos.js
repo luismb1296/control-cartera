@@ -340,7 +340,7 @@ export async function vistaEndoso(main, id, vigente) {
     q(sb.from('asegurados').select('*').eq('poliza_id', m.poliza_id)),
     q(sb.from('movimiento_eventos').select('*').eq('movimiento_id', id).order('creado_en', { ascending: false })),
     q(sb.from('recibos').select('*').eq('poliza_id', m.poliza_id).order('numero')),
-    q(sb.from('tareas').select('id,titulo,estatus,asignado_a,origen,movimiento_id').neq('estatus', 'listo')),
+    q(sb.from('tareas').select('id,titulo,estatus,asignado_a,origen,movimiento_id').eq('hecha', false)),
   ]);
   const [c, docsCli] = await Promise.all([q(sb.from('clientes').select('*').eq('id', p.cliente_id).single()), q(sb.from('documentos').select('*').eq('cliente_id', p.cliente_id).order('creado_en', { ascending: false }))]);
   if (!vigente()) return;

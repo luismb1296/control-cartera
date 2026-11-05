@@ -62,8 +62,8 @@ export async function vistaInicio(main, _p, vigente) {
     <div><h1>${txtSaludo}, ${esc(ctx.perfil.nombre.split(' ')[0])}</h1>
       <p class="muted" style="margin:4px 0 0">${esc(fechaLarga.charAt(0).toUpperCase() + fechaLarga.slice(1))}</p></div>
     <div class="filters">
-      <form id="buscar" role="search"><label for="bq" class="sr">Buscar</label>
-        <input id="bq" class="search" type="search" placeholder="Buscar cliente, póliza o RFC"></form>
+      <form id="buscar" role="search" class="buscador"><label for="bq" class="sr">Buscar</label>
+        <input id="bq" class="search" type="search" placeholder="Buscar cliente, póliza o RFC"><button class="btn" type="submit">Buscar</button></form>
       <button class="btn" id="nCliente" type="button">+ Cliente</button>
       <button class="btn primary" id="nPoliza" type="button">+ Nueva póliza</button>
     </div>

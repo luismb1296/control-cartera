@@ -6,7 +6,7 @@ import { VARIABLES as VARS_PDF, sugerirVariable, camposDePdf, llenarFormato, lee
 import { USOS_POLIZA, textarea } from '../ui.js';
 import { CARTA_EJEMPLO } from './cartas.js';
 import { tablaCondiciones, accionCondiciones } from './condiciones.js';
-import { TIPOS_CARPETA, descargar, cargarPdfLib, iso } from '../ui.js';
+import { TIPOS_CARPETA, descargar, cargarPdfLib, iso, pctSugerido } from '../ui.js';
 import { PALETAS, PALETA_BASE, paletaDe, variables, aplicarPaleta } from '../tema.js';
 import { VARS_WA, CANALES, textoParaMeta, canalesDe } from '../whatsapp.js';
 
@@ -213,7 +213,7 @@ export async function vistaConfig(main, _p, vigente) {
           ${prods.length ? `<div class="tbl-wrap"><table><thead><tr><th>Producto</th><th>Ramo</th><th>1er pago</th><th>Siguientes</th><th class="num">Comisión</th><th></th></tr></thead>
             <tbody>${prods.map(x => `<tr${x.activo ? '' : ' style="opacity:.6"'}><td>${esc(x.nombre)}${x.activo ? '' : ' <span class="pill p-gray">Inactivo</span>'}</td><td>${esc(RAMOS[x.ramo])}</td>
               <td class="nw">${dias(x.dias_primer_pago, a.dias_primer_pago ?? 30)}</td><td class="nw">${dias(x.dias_pago_subsecuente, a.dias_pago_subsecuente ?? 30)}</td>
-              <td class="num">${x.pct_comision != null ? Number(x.pct_comision) + '%' : '—'}</td>
+              <td class="num">${x.pct_comision != null ? Number(x.pct_comision) + '%' : '—'}${(x.comision_tabla || []).length ? '<div class="muted small">varía por edad</div>' : x.pct_comision_renovacion != null ? `<div class="muted small">${Number(x.pct_comision_renovacion)}% renov.</div>` : ''}</td>
               <td class="nw">${gestion ? `<button type="button" class="linkbtn small" data-pedit="${x.id}">Editar</button>` : ''}</td></tr>`).join('')}</tbody></table></div>
             <p class="muted small" style="margin-bottom:0">* Sin plazo propio: usa el de la aseguradora.</p>`
             : '<div class="empty">Sin productos registrados.</div>'}
@@ -363,17 +363,53 @@ export async function vistaConfig(main, _p, vigente) {
       cuerpo: `<div class="form-grid">
         ${input('Nombre del producto / plan', 'nombre', { value: x?.nombre, req: true, wide: true })}
         ${select('Ramo', 'ramo', opts(RAMOS, x?.ramo || 'gmm'), { req: true })}
-        ${input('% de comisión', 'pct', { type: 'number', value: x?.pct_comision ?? '', attrs: 'step="0.01" min="0" max="100"' })}
+        ${input('% de comisión (primer año)', 'pct', { type: 'number', value: x?.pct_comision ?? '', attrs: 'step="0.01" min="0" max="100"' })}
+        ${input('% de comisión en renovación', 'pctr', { type: 'number', value: x?.pct_comision_renovacion ?? '', attrs: 'step="0.01" min="0" max="100" placeholder="Igual al primer año"' })}
         ${input('Días para pagar el primer recibo', 'd1', { type: 'number', value: x?.dias_primer_pago ?? '', attrs: `min="0" placeholder="${a.dias_primer_pago ?? 30} (de la aseguradora)"` })}
         ${input('Días para pagar los recibos siguientes', 'd2', { type: 'number', value: x?.dias_pago_subsecuente ?? '', attrs: `min="0" placeholder="${a.dias_pago_subsecuente ?? 30} (de la aseguradora)"` })}
         ${x ? select('Estatus', 'activo', opts({ si: 'Activo', no: 'Inactivo (ya no se vende)' }, x.activo ? 'si' : 'no')) : ''}
-      </div><p class="muted small">Deje vacíos los días para usar los de ${esc(a.nombre)}. Los cambios aplican a las pólizas nuevas.</p>`,
-      onSubmit: async v => {
+      </div><p class="muted small">Deje vacíos los días para usar los de ${esc(a.nombre)}. Los cambios aplican a las pólizas nuevas.</p>
+      <details class="com-edad"${(x?.comision_tabla || []).length ? ' open' : ''}><summary><b>La comisión cambia con la edad</b> <span class="muted small">(común en gastos médicos)</span></summary>
+        <p class="muted small" style="margin:8px 0">Capture los rangos de edad que le dio la aseguradora. Al registrar o renovar una póliza de este producto, la app calcula el % con la edad al inicio de vigencia. Si una edad no está en la tabla, usa los % de arriba.</p>
+        ${select('Edad que cuenta', 'edad_de', opts({ titular: 'La del titular', mayor: 'La del asegurado de mayor edad' }, x?.comision_edad_de || 'titular'))}
+        <div class="tbl-wrap" style="margin-top:8px"><table class="cmp-edit"><thead><tr><th>Edad desde</th><th>hasta</th><th>% primer año</th><th>% renovación</th><th></th></tr></thead><tbody id="ceFilas"></tbody></table></div>
+        <button type="button" class="btn sm" id="ceAdd" style="margin-top:6px">+ Rango de edad</button>
+      </details>
+      ${x ? '<label class="small" style="display:flex;gap:8px;align-items:center;margin-top:12px"><input type="checkbox" name="aplicar" style="width:auto;min-height:0"> Recalcular también las pólizas vigentes de este producto (excepto las que tienen el % real del estado de cuenta o capturado a mano)</label>' : ''}`,
+      onOpen: f => {
+        const cuerpo = f.querySelector('#ceFilas');
+        const filaCE = (r = {}) => { const k = cuerpo.children.length; cuerpo.insertAdjacentHTML('beforeend', `<tr data-ce>
+          <td><label class="sr" for="ced${k}">Edad desde</label><input id="ced${k}" data-k="desde" type="number" min="0" max="120" value="${r.desde ?? ''}"></td>
+          <td><label class="sr" for="ceh${k}">Edad hasta</label><input id="ceh${k}" data-k="hasta" type="number" min="0" max="120" value="${r.hasta ?? ''}"></td>
+          <td><label class="sr" for="cep${k}">% primer año</label><input id="cep${k}" data-k="pct" type="number" step="0.01" min="0" max="100" value="${r.pct ?? ''}"></td>
+          <td><label class="sr" for="cer${k}">% renovación</label><input id="cer${k}" data-k="pct_renovacion" type="number" step="0.01" min="0" max="100" value="${r.pct_renovacion ?? ''}" placeholder="Igual"></td>
+          <td><button type="button" class="linkbtn small" data-qce>Quitar</button></td></tr>`); };
+        (x?.comision_tabla || []).forEach(filaCE);
+        f.querySelector('#ceAdd').onclick = () => { const ult = [...cuerpo.querySelectorAll('[data-k=hasta]')].pop(); filaCE({ desde: ult?.value !== '' && ult ? Number(ult.value) + 1 : 0 }); };
+        cuerpo.addEventListener('click', e => { if (e.target.dataset.qce != null) e.target.closest('tr').remove(); });
+      },
+      onSubmit: async (v, f) => {
+        const tabla = [...f.querySelectorAll('[data-ce]')].map(tr => Object.fromEntries([...tr.querySelectorAll('[data-k]')].map(i => [i.dataset.k, i.value === '' ? null : Number(i.value)])))
+          .filter(r => r.pct != null).map(r => ({ desde: r.desde ?? 0, hasta: r.hasta ?? 120, pct: r.pct, pct_renovacion: r.pct_renovacion }));
+        if (tabla.some(r => r.desde > r.hasta)) throw new Error('En la tabla por edad, "desde" no puede ser mayor que "hasta".');
         const fila = { nombre: v.nombre.trim(), ramo: v.ramo, pct_comision: v.pct === '' ? null : Number(v.pct),
+          pct_comision_renovacion: v.pctr === '' ? null : Number(v.pctr), comision_tabla: tabla.sort((a, b) => a.desde - b.desde), comision_edad_de: v.edad_de || 'titular',
           dias_primer_pago: v.d1 === '' ? null : Number(v.d1), dias_pago_subsecuente: v.d2 === '' ? null : Number(v.d2) };
-        if (x) { fila.activo = v.activo === 'si'; await q(sb.from('productos').update(fila).eq('id', x.id)); }
-        else await q(sb.from('productos').insert({ ...fila, aseguradora_id: a.id }));
-        await recargarCatalogos(); recordar('catalogos'); toast(x ? 'Producto actualizado.' : 'Producto agregado.'); refrescar();
+        try {
+          if (x) { fila.activo = v.activo === 'si'; await q(sb.from('productos').update(fila).eq('id', x.id)); }
+          else await q(sb.from('productos').insert({ ...fila, aseguradora_id: a.id }));
+        } catch (e) { if (/comision_tabla|comision_edad_de|pct_comision_renovacion/.test(e.message)) throw new Error('Falta actualizar la base de datos: corra el archivo 19_tableros_comisiones.sql en Supabase.'); throw e; }
+        let n = 0;
+        if (x && v.aplicar) {
+          const pols = (await q(sb.from('polizas').select('id,inicio_vigencia,poliza_anterior_id,pct_comision,comision_origen').eq('producto_id', x.id).eq('estatus', 'activa')))
+            .filter(p => !['estado_cuenta', 'manual'].includes(p.comision_origen));
+          for (const p of pols) {
+            const aseg = await q(sb.from('asegurados').select('nombre,parentesco,fecha_nacimiento,tipo').eq('poliza_id', p.id));
+            const sg = pctSugerido({ ...x, ...fila }, aseg.filter(z => z.tipo !== 'beneficiario'), p.inicio_vigencia, !!p.poliza_anterior_id);
+            if (sg && Number(sg.pct) !== Number(p.pct_comision)) { const { error } = await sb.rpc('ajustar_comision', { p_poliza: p.id, p_pct: sg.pct, p_origen: sg.origen }); if (!error) n++; }
+          }
+        }
+        await recargarCatalogos(); recordar('catalogos'); toast(x ? `Producto actualizado.${v.aplicar ? ` Se recalculó el % de ${n} póliza${n === 1 ? '' : 's'}.` : ''}` : 'Producto agregado.'); refrescar();
       }
     });
   }
